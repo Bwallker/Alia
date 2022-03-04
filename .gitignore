@@ -1,0 +1,6 @@
+/cfg.alia
+/src/cfg.alia
+target/
+/Cargo.lock
+/Cargo.toml
+.idea/
