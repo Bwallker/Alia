@@ -1,3 +1,3 @@
 # Alia
 
-A command line tool for creting and managing aliases
+A command line tool for creating and managing aliases
