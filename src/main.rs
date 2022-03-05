@@ -41,7 +41,7 @@ enum StringParseErrorCode {
 
 impl Display for StringParseErrorCode {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{:?}", string_parse_error_to_string(self))
+    write!(f, "{}", string_parse_error_to_string(self))
   }
 }
 
@@ -66,7 +66,7 @@ enum ConfigParseErrorCode {
 
 impl Display for ConfigParseErrorCode {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{:?}", config_parse_error_to_string(self))
+    write!(f, "{}", config_parse_error_to_string(self))
   }
 }
 
