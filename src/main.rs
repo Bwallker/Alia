@@ -7,6 +7,7 @@ use simple_logger::SimpleLogger;
 use std::env::{args, Args};
 use std::hash::Hash;
 
+
 trait OkOrDefault {
   type T;
   fn ok_or_default<E: Default>(self) -> Result<Self::T, E>;
@@ -23,8 +24,10 @@ impl<X> OkOrDefault for Option<X> {
 const PATH_TO_CONFIG: &'static str = "./cfg.alia";
 
 const END_OF_LINE_SEQUENCE: &'static str = if cfg!(windows) { "\r\n" } else { "\n" };
+
 const NAME_OF_TERMINAL_PROGRAM: &'static str = if cfg!(windows) { "cmd" } else { "sh" };
 const RUN_AS_COMMAND_IN_OS: &'static str = if cfg!(windows) { "/C" } else { "-c" };
+
 
 use log::{info, log, Level};
 
@@ -38,14 +41,23 @@ enum StringParseErrorCode {
 
 impl Display for StringParseErrorCode {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{:?}", self)
+    write!(f, "{:?}", string_parse_error_to_string(self))
   }
+}
+
+fn string_parse_error_to_string(err: &StringParseErrorCode) -> String {
+  match err {
+    StringWithoutOpeningQuote => "Your string did not contain an opening quote.",
+    InvalidString => "Your string consisted of only an opening parenthesis and nothing else.",
+    EmptyString => "Your string was empty. This is not allowed as all aliases must have names and values that are not empty.",
+    StringWithoutClosingQuote => "Your string did not contain a closing quote.",
+  }.to_string()
 }
 
 #[derive(Debug, Eq, PartialOrd, PartialEq, Ord, Hash, Clone)]
 enum ConfigParseErrorCode {
   ConfigNotFound,
-  ConfigCouldNotBeCreated,
+  ConfigCouldNotBeCreated(String),
   MissingEqualSign(u32),
   MissingAliasValue(u32),
   InvalidAlias(StringParseErrorCode, u32),
@@ -54,7 +66,18 @@ enum ConfigParseErrorCode {
 
 impl Display for ConfigParseErrorCode {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{:?}", self)
+    write!(f, "{:?}", config_parse_error_to_string(self))
+  }
+}
+
+fn config_parse_error_to_string(err: &ConfigParseErrorCode) -> String {
+  match err {
+    ConfigNotFound => format!("A config file could not be found. A new one has been created."),
+    ConfigCouldNotBeCreated(s) => format!("A config file could not be found. Creating a new one also failed. Here is the error the OS reported when creating the file:{END_OF_LINE_SEQUENCE}{s}"),
+    MissingEqualSign(v) => format!("Expected an equal sign after alias name. Line number: {v}"),
+    MissingAliasValue(v) => format!("Missing alias value. Line number: {v}"),
+    InvalidAlias(e, v) => format!("The alias name could not be parsed into a string. Line number: {v}. Here is the string parse error:{END_OF_LINE_SEQUENCE}{e}."),
+    InvalidValue(e, v) => format!("The alias value could not be parsed into a string. Line number: {v}. Here is the string parse error:{END_OF_LINE_SEQUENCE}{e}."),
   }
 }
 
@@ -63,18 +86,33 @@ enum CommandLineArgumentErrorCode {
   MissingNameArgument(u32),
   MissingContentArgument(u32),
   FailedExecute(u32),
-  CannotRemoveNonExistentValue(u32),
-  InvalidAliasName(u32),
-  AliasDoesNotExist(u32),
-  AliasAlreadyExists(u32),
-  InvalidCommand(u32),
+  CannotRemoveNonExistentValue(String, u32),
+  InvalidAliasName(String, u32),
+  AliasDoesNotExist(String, u32),
+  AliasAlreadyExists(String, u32),
+  InvalidCommand(String, u32),
+  NoValidArgs(u32),
 }
 
 use CommandLineArgumentErrorCode::*;
 
 impl Display for CommandLineArgumentErrorCode {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{:?}", self)
+    write!(f, "{}", command_line_error_to_string(self))
+  }
+}
+
+fn command_line_error_to_string(err: &CommandLineArgumentErrorCode) -> String {
+  match err {
+    MissingNameArgument(v) => format!("You did not supply a name argument for command. Error occurred at argument number {v}"),
+    MissingContentArgument(v) => format!("You did not supply a content argument for command. Error occurred at argument number {v}"),
+    FailedExecute(v) => format!("Execution of execute command failed. Error occurred at argument number {v}"),
+    CannotRemoveNonExistentValue(name, v) => format!("Error removing alias of name {name}. This alias had no value associated with it and thus could not be removed. Error occurred at argument number {v}"),
+    InvalidAliasName(name, v) => format!("Alias with name {name} has no content associated with it and thus cannot be executed. Error occurred at argument number {v}"),
+    AliasDoesNotExist(name, v) => format!("Cannot change alias with name {name} because it does not exist. Error occurred at argument number {v}"),
+    AliasAlreadyExists(name, v) => format!("Cannot create alias with name {name} that already exists. Error occurred at argument number {v}"),
+    InvalidCommand(name, v) => format!("Command with name {name} does not exist. Error occurred at argument number {v}"),
+    NoValidArgs(v) => format!("You passed no valid arguments to Alia. Error occurred at argument number {v}"),
   }
 }
 
@@ -103,13 +141,27 @@ macro_rules! debug_info {
     }
   );
 }
+macro_rules! printlnln {
+  ($($arg:tt)+) => {
+    println!($($arg)+);
+    println!();
+  };
+  () => {
+    println!();
+    println!();
+  };
+}
 
+macro_rules! exit_failure {
+  () => {
+    exit(1);
+  };
+}
 use StringParseErrorCode::*;
 use crate::ConfigParseErrorCode::*;
 // const NAME_OF_PROGRAM: &'static str = "Alia"; use log::Level;
 
 fn main() {
-  debug_log!(Level::Info, "Entered main");
   if cfg!(debug_assertions) {
     let res = SimpleLogger::new().init();
     if let Err(err) = res {
@@ -117,13 +169,14 @@ fn main() {
       println!("{}", err);
     }
   }
+  debug_log!(Level::Info, "Successfully initialized logger");
 
   let cfg = read_from_config_file();
   if let Err(error) = &cfg {
     println!("Error parsing config!");
     println!("Error:");
     println!("{}", error);
-    exit(1);
+    exit_failure!();
   }
 
   let mut cfg = unsafe { cfg.unwrap_unchecked() };
@@ -137,14 +190,14 @@ fn main() {
   if let Err(e) = res {
     println!("Error parsing your arguments.");
     println!("{}", e);
-    exit(1);
+    exit_failure!();
   }
 
   let res = write_to_config_file(&cfg);
 
   if let Err(_) = res {
     println!("Error writing to cfg file. Your changes may not have been saved.");
-    exit(1);
+    exit_failure!();
   }
 }
 
@@ -160,17 +213,24 @@ fn parse_command_line_args(cfg: &mut HashMap<String, String>) -> Result<(), Comm
   let mut args = args();
   let mut current_arg: u32 = 0;
   let maybe_path = args.next();
+  let mut first_arg_invalid = false;
   if let Some(arg) = maybe_path {
     current_arg += 1;
-    let parser = unsafe { parse_arg(arg.as_str(), true).unwrap_unchecked() };
+    let parser = parse_arg(arg.as_str()).unwrap_or_else(|| {
+      first_arg_invalid = true;
+      &do_nothing
+    });
     parser(&mut args, &mut current_arg, cfg)?;
+  }
+  if args.len() == 0 && first_arg_invalid {
+    return Err(NoValidArgs(current_arg));
   }
   while let Some(arg) = args.next() {
     current_arg += 1;
-    let arg = arg.as_str();
-    let parser = parse_arg(arg, false);
+    let arg_str = arg.as_str();
+    let parser = parse_arg(arg_str);
     if let None = parser {
-      return Err(InvalidCommand(current_arg));
+      return Err(InvalidCommand(arg, current_arg));
     }
     let parser = unsafe { parser.unwrap_unchecked() };
     parser(&mut args, &mut current_arg, cfg)?;
@@ -178,7 +238,7 @@ fn parse_command_line_args(cfg: &mut HashMap<String, String>) -> Result<(), Comm
   Ok(())
 }
 
-fn parse_arg(arg: &str, ignore_bad_args: bool) -> Option<CommandLineArgParser> {
+fn parse_arg(arg: &str) -> Option<CommandLineArgParser> {
   let res: CommandLineArgParser = match arg {
     "-a" | "--add" => &add_alias,
     "-r" | "--remove" => &remove_alias,
@@ -188,13 +248,7 @@ fn parse_arg(arg: &str, ignore_bad_args: bool) -> Option<CommandLineArgParser> {
       display_help_message();
       &do_nothing
     }
-    _ => {
-      if ignore_bad_args {
-        &do_nothing
-      } else {
-        return None;
-      }
-    }
+    _ => { return None; }
   };
   Some(res)
 }
@@ -206,7 +260,7 @@ fn add_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, S
   let content_of_alias = get_next_arg(args, current_arg).ok_or(MissingContentArgument(*current_arg))?;
   let res = cfg.get(name_of_alias.as_str());
   if let Some(_) = res {
-    return Err(AliasAlreadyExists(*current_arg));
+    return Err(AliasAlreadyExists(name_of_alias, *current_arg));
   }
   cfg.insert(name_of_alias, content_of_alias);
   Ok(())
@@ -216,13 +270,13 @@ fn remove_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String
   let name_of_alias = get_next_arg(args, current_arg).ok_or(MissingNameArgument(*current_arg))?;
   match cfg.remove(&name_of_alias) {
     Some(_) => Ok(()),
-    None => Err(CannotRemoveNonExistentValue(*current_arg))
+    None => Err(CannotRemoveNonExistentValue(name_of_alias, *current_arg))
   }
 }
 
 fn execute_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
   let name_of_alias = get_next_arg(args, current_arg).ok_or(MissingNameArgument(*current_arg))?;
-  let content_of_alias = cfg.get(name_of_alias.as_str()).ok_or(InvalidAliasName(*current_arg))?;
+  let content_of_alias = cfg.get(name_of_alias.as_str()).ok_or(InvalidAliasName(name_of_alias, *current_arg))?;
   let split = content_of_alias.split_whitespace();
   let iter = [RUN_AS_COMMAND_IN_OS].iter().map(|x| *x);
   let iter = iter.chain(split);
@@ -240,7 +294,7 @@ fn change_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String
 
   let res = cfg.get(name_of_alias.as_str());
   if let None = res {
-    return Err(AliasDoesNotExist(*current_arg));
+    return Err(AliasDoesNotExist(name_of_alias, *current_arg));
   }
   cfg.insert(name_of_alias, content_of_alias);
   Ok(())
@@ -249,8 +303,8 @@ fn change_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String
 fn read_from_config_file() -> Result<HashMap<String, String>, ConfigParseErrorCode> {
   let contents = fs::read_to_string(PATH_TO_CONFIG);
   if let Err(_) = contents {
-    if let Err(_) = File::create(PATH_TO_CONFIG) {
-      return Err(ConfigCouldNotBeCreated);
+    if let Err(e) = File::create(PATH_TO_CONFIG) {
+      return Err(ConfigCouldNotBeCreated(e.to_string()));
     }
     return Err(ConfigNotFound);
   }
@@ -362,15 +416,17 @@ fn parse_string_track_lines(slice: &mut &str, current_line: &mut u32) -> Result<
 }
 
 fn display_help_message() {
-  println!("Available commands are:");
+  printlnln!("Available commands are:");
   println!("-a --add ---- Add an alias to Alia ---- Takes name of the alias and the content of the alias as arguments");
-  println!("Example usage: alia --add run_release \"cargo run --release\"");
+  printlnln!("Example usage: alia --add run_release \"cargo run --release\"");
   println!("-r --remove ---- Remove an alias from Alia ---- Takes the name of the alias to remove as an argument");
-  println!("Example usage: alia --remove run_release");
-  println!("change ---- changes an alias in Alia ---- Takes the name of the alias and the new content as arguments");
-  println!("Example usage: alia --change my_alias \"echo test\"");
-  println!("Execute ---- Executes the given alias ---- Takes the name of the alias to execute as an argument");
-  println!("Example usage: alias --execute my_alias");
+  printlnln!("Example usage: alia --remove run_release");
+  println!("-c --change ---- changes an alias in Alia ---- Takes the name of the alias and the new content as arguments");
+  printlnln!("Example usage: alia --change my_alias \"echo test\"");
+  println!("-e --execute ---- Executes the given alias ---- Takes the name of the alias to execute as an argument");
+  printlnln!("Example usage: alia --execute my_alias");
+  println!("-h --help ---- Displays this message");
+  printlnln!("Example usage: alia --help");
 }
 
 
