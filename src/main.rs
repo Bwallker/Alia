@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::{File};
 use std::process::{Command, exit};
 use simple_logger::SimpleLogger;
-use std::env::{args, Args};
+use std::env::{args};
 use std::hash::Hash;
 
 
@@ -185,7 +185,7 @@ fn main() {
   debug_info!("{:?}", cfg);
 
 
-  let res = parse_command_line_args(&mut cfg);
+  let res = parse_command_line_args(args(), &mut cfg);
 
   if let Err(e) = res {
     println!("Error parsing your arguments.");
@@ -201,16 +201,15 @@ fn main() {
   }
 }
 
-type CommandLineArgParser = &'static dyn Fn(&mut Args, &mut u32, &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode>;
+type CommandLineArgParser<T> = &'static dyn Fn(&mut T, &mut u32, &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode>;
 
-fn get_next_arg(args: &mut Args, current_arg: &mut u32) -> Option<String> {
+fn get_next_arg<T: ExactSizeIterator<Item = String>>(args: &mut T, current_arg: &mut u32) -> Option<String> {
   let res = args.next()?;
   *current_arg += 1;
   Some(res)
 }
 
-fn parse_command_line_args(cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
-  let mut args = args();
+fn parse_command_line_args<T: 'static + ExactSizeIterator<Item = String>>(mut args: T, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
   let mut current_arg: u32 = 0;
   let maybe_path = args.next();
   let mut first_arg_invalid = false;
@@ -228,7 +227,7 @@ fn parse_command_line_args(cfg: &mut HashMap<String, String>) -> Result<(), Comm
   while let Some(arg) = args.next() {
     current_arg += 1;
     let arg_str = arg.as_str();
-    let parser = parse_arg(arg_str);
+    let parser = parse_arg::<T>(arg_str);
     if let None = parser {
       return Err(InvalidCommand(arg, current_arg));
     }
@@ -238,8 +237,8 @@ fn parse_command_line_args(cfg: &mut HashMap<String, String>) -> Result<(), Comm
   Ok(())
 }
 
-fn parse_arg(arg: &str) -> Option<CommandLineArgParser> {
-  let res: CommandLineArgParser = match arg {
+fn parse_arg<T: ExactSizeIterator<Item = String>>(arg: &str) -> Option<CommandLineArgParser<T>> {
+  let res: CommandLineArgParser<T> = match arg {
     "-a" | "--add" => &add_alias,
     "-r" | "--remove" => &remove_alias,
     "-e" | "--execute" => &execute_alias,
@@ -253,9 +252,9 @@ fn parse_arg(arg: &str) -> Option<CommandLineArgParser> {
   Some(res)
 }
 
-fn do_nothing(_args: &mut Args, _current_arg: &mut u32, _cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> { Ok(()) }
+fn do_nothing<T: ExactSizeIterator<Item = String>>(_args: &mut T, _current_arg: &mut u32, _cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> { Ok(()) }
 
-fn add_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
+fn add_alias<T: ExactSizeIterator<Item = String>>(args: &mut T, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
   let name_of_alias = get_next_arg(args, current_arg).ok_or(MissingNameArgument(*current_arg))?;
   let content_of_alias = get_next_arg(args, current_arg).ok_or(MissingContentArgument(*current_arg))?;
   let res = cfg.get(name_of_alias.as_str());
@@ -266,7 +265,7 @@ fn add_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, S
   Ok(())
 }
 
-fn remove_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
+fn remove_alias<T: ExactSizeIterator<Item = String>>(args: &mut T, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
   let name_of_alias = get_next_arg(args, current_arg).ok_or(MissingNameArgument(*current_arg))?;
   match cfg.remove(&name_of_alias) {
     Some(_) => Ok(()),
@@ -274,7 +273,7 @@ fn remove_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String
   }
 }
 
-fn execute_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
+fn execute_alias<T: ExactSizeIterator<Item = String>>(args: &mut T, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
   let name_of_alias = get_next_arg(args, current_arg).ok_or(MissingNameArgument(*current_arg))?;
   let content_of_alias = cfg.get(name_of_alias.as_str()).ok_or(InvalidAliasName(name_of_alias, *current_arg))?;
   let split = content_of_alias.split_whitespace();
@@ -287,7 +286,7 @@ fn execute_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<Strin
   }
 }
 
-fn change_alias(args: &mut Args, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
+fn change_alias<T: ExactSizeIterator<Item = String>>(args: &mut T, current_arg: &mut u32, cfg: &mut HashMap<String, String>) -> Result<(), CommandLineArgumentErrorCode> {
   let name_of_alias = get_next_arg(args, current_arg).ok_or(MissingNameArgument(*current_arg))?;
   let content_of_alias = get_next_arg(args, current_arg).ok_or(MissingContentArgument(*current_arg))?;
 
